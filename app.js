@@ -21,6 +21,7 @@ class MatterQRScanner {
         this.flashActive = false;
         this.lastScannedCode = null;
         this.dedupeTime = 5000;
+        this.autofocusIntervalId = null;
         
         // Canvas для обработки изображения
         this.processingCanvas = document.createElement('canvas');
@@ -54,27 +55,12 @@ class MatterQRScanner {
             this.loadingEl.classList.remove('hidden');
             this.startBtn.disabled = true;
 
-            // Максимально высокое разрешение для лучшей фокусировки
-            const constraints = {
-                video: {
-                    facingMode: { exact: 'environment' },
-                    width: { ideal: 1920, min: 640 },
-                    height: { ideal: 1080, min: 480 },
-                    // Пытаемся установить continuous focus
-                    focusMode: { ideal: 'continuous' },
-                    advanced: [
-                        { focusMode: 'continuous' },
-                        { zoom: { ideal: 1 } }
-                    ]
-                },
-                audio: false
-            };
-
-            this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+            this.stream = await this.getBestCameraStream();
             this.video.srcObject = this.stream;
 
             // Применяем фокусировку после получения потока
             await this.applyFocusConstraints();
+            this.startAutofocusLoop();
 
             this.video.onplay = () => {
                 console.log('📹 Видео запущено', {
@@ -101,6 +87,41 @@ class MatterQRScanner {
         }
     }
 
+    async getBestCameraStream() {
+        const profiles = [
+            {
+                video: {
+                    facingMode: { ideal: 'environment' },
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 },
+                    advanced: [{ focusMode: 'continuous' }]
+                },
+                audio: false
+            },
+            {
+                video: {
+                    facingMode: { ideal: 'environment' },
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: false
+            },
+            { video: true, audio: false }
+        ];
+
+        let lastError = null;
+        for (const constraints of profiles) {
+            try {
+                return await navigator.mediaDevices.getUserMedia(constraints);
+            } catch (error) {
+                lastError = error;
+                console.warn('⚠️ Профиль камеры не подошел:', constraints, error.name);
+            }
+        }
+
+        throw lastError || new Error('Не удалось получить доступ к камере');
+    }
+
     // Пытаемся применить фокусировку
     async applyFocusConstraints() {
         try {
@@ -114,16 +135,32 @@ class MatterQRScanner {
                 torch: capabilities.torch
             });
 
-            // Пытаемся установить continuous focus
+            const advanced = [];
+
             if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
-                await videoTrack.applyConstraints({
-                    advanced: [{ focusMode: 'continuous' }]
-                });
-                console.log('✅ Continuous focus установлен');
+                advanced.push({ focusMode: 'continuous' });
+            }
+
+            if (capabilities.zoom && typeof capabilities.zoom.min === 'number' && typeof capabilities.zoom.max === 'number') {
+                const zoomValue = Math.min(Math.max(1.2, capabilities.zoom.min), capabilities.zoom.max);
+                advanced.push({ zoom: zoomValue });
+            }
+
+            if (advanced.length > 0) {
+                await videoTrack.applyConstraints({ advanced });
+                console.log('✅ Focus constraints применены:', advanced);
             }
         } catch (error) {
             console.log('ℹ️ Focus constraints не поддерживаются:', error.message);
         }
+    }
+
+    startAutofocusLoop() {
+        if (this.autofocusIntervalId) clearInterval(this.autofocusIntervalId);
+        this.autofocusIntervalId = setInterval(() => {
+            if (!this.scanning || !this.stream) return;
+            this.applyFocusConstraints();
+        }, 1500);
     }
 
     // Trigger focus при клике (Android)
@@ -133,6 +170,10 @@ class MatterQRScanner {
     }
 
     stopScanning() {
+        if (this.autofocusIntervalId) {
+            clearInterval(this.autofocusIntervalId);
+            this.autofocusIntervalId = null;
+        }
         console.log('🛑 Останавливаем сканирование...');
         this.scanning = false;
         if (this.stream) {
