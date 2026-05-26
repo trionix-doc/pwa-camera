@@ -153,6 +153,12 @@ class MatterQRScanner {
         setTimeout(() => this.showDetail(result.id), 300);
     }
 
+
+    normalizeQRData(qrData) {
+        if (typeof qrData !== 'string') return '';
+        return qrData.trim().replace(/\s+/g, '');
+    }
+
     detectMatterType(qrData) {
         if (!qrData) return '📱 QR Code';
         if (qrData.toUpperCase().startsWith('MT:')) return '🔗 Matter Device';
