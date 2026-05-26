@@ -25,10 +25,6 @@ class MatterQRScanner {
         this.barcodeDetector = null;
         this.scanFrameCounter = 0;
         
-        // Canvas для обработки изображения
-        this.processingCanvas = document.createElement('canvas');
-        this.processingContext = this.processingCanvas.getContext('2d', { willReadFrequently: true });
-
         this.init();
     }
 
@@ -52,7 +48,6 @@ class MatterQRScanner {
         // Добавляем tap-to-focus для Android
         this.video.addEventListener('click', () => this.triggerFocus());
     }
-
 
     initDetector() {
         try {
@@ -244,7 +239,6 @@ class MatterQRScanner {
 
         this.scanningFrameId = requestAnimationFrame(() => this.scanQRCode());
     }
-
 
     getScanRegion(width, height) {
         const size = Math.floor(Math.min(width, height) * 0.7);
