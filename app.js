@@ -22,16 +22,15 @@ class MatterQRScanner {
         this.lastScannedCode = null;
         this.dedupeTime = 5000;
         this.autofocusIntervalId = null;
+        this.barcodeDetector = null;
+        this.scanFrameCounter = 0;
         
-        // Canvas для обработки изображения
-        this.processingCanvas = document.createElement('canvas');
-        this.processingContext = this.processingCanvas.getContext('2d', { willReadFrequently: true });
-
         this.init();
     }
 
     init() {
         this.setupEventListeners();
+        this.initDetector();
         this.loadScannedResults();
         this.registerServiceWorker();
     }
@@ -50,11 +49,24 @@ class MatterQRScanner {
         this.video.addEventListener('click', () => this.triggerFocus());
     }
 
+    initDetector() {
+        try {
+            if ('BarcodeDetector' in window) {
+                this.barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] });
+                console.log('✅ BarcodeDetector доступен, включаем гибридное распознавание');
+            }
+        } catch (error) {
+            console.log('ℹ️ BarcodeDetector недоступен:', error.message);
+            this.barcodeDetector = null;
+        }
+    }
+
     async startScanning() {
         try {
             this.loadingEl.classList.remove('hidden');
             this.startBtn.disabled = true;
 
+            this.scanFrameCounter = 0;
             this.stream = await this.getBestCameraStream();
             this.video.srcObject = this.stream;
 
@@ -189,10 +201,11 @@ class MatterQRScanner {
         this.toggleFlashBtn.disabled = true;
         this.flashActive = false;
         this.updateFlashButton();
+        this.scanFrameCounter = 0;
         this.showToast('Сканирование остановлено', 'success');
     }
 
-    scanQRCode() {
+    async scanQRCode() {
         if (!this.scanning) return;
 
         // Проверяем, что видео готово
@@ -204,28 +217,20 @@ class MatterQRScanner {
         try {
             this.canvas.width = this.video.videoWidth;
             this.canvas.height = this.video.videoHeight;
-            
-            // Рисуем текущий кадр из видео
             this.canvasContext.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
-            const imageData = this.canvasContext.getImageData(0, 0, this.canvas.width, this.canvas.height);
 
-            // Пытаемся распознать QR с обычным изображением
-            let code = jsQR(imageData.data, imageData.width, imageData.height, {
-                inversionAttempts: 'attemptBoth'
-            });
+            const region = this.getScanRegion(this.canvas.width, this.canvas.height);
+            const roiImage = this.canvasContext.getImageData(region.x, region.y, region.size, region.size);
 
-            // Если не нашли, пытаемся с обработанным изображением
-            if (!code) {
-                const processedData = this.preprocessImage(imageData);
-                code = jsQR(processedData.data, processedData.width, processedData.height, {
-                    inversionAttempts: 'attemptBoth'
-                });
+            let qrData = await this.detectWithBarcodeDetector();
+            if (!qrData) {
+                qrData = this.detectWithJsQR(roiImage);
             }
 
-            if (code) {
-                console.log('✅ QR код найден:', code.data);
-                this.handleQRCode(code.data);
-                return; // Выходим из цикла сканирования
+            if (qrData) {
+                console.log('✅ QR код найден:', qrData);
+                this.handleQRCode(qrData);
+                return;
             }
 
         } catch (error) {
@@ -233,6 +238,46 @@ class MatterQRScanner {
         }
 
         this.scanningFrameId = requestAnimationFrame(() => this.scanQRCode());
+    }
+
+    getScanRegion(width, height) {
+        const size = Math.floor(Math.min(width, height) * 0.7);
+        return {
+            x: Math.floor((width - size) / 2),
+            y: Math.floor((height - size) / 2),
+            size
+        };
+    }
+
+    async detectWithBarcodeDetector() {
+        if (!this.barcodeDetector || this.scanFrameCounter % 3 !== 0) {
+            this.scanFrameCounter += 1;
+            return null;
+        }
+
+        try {
+            const barcodes = await this.barcodeDetector.detect(this.video);
+            const qr = barcodes.find(item => item.rawValue);
+            return qr ? qr.rawValue : null;
+        } catch (error) {
+            console.log('ℹ️ BarcodeDetector error:', error.message);
+            return null;
+        }
+    }
+
+    detectWithJsQR(imageData) {
+        let code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: 'attemptBoth'
+        });
+
+        if (!code) {
+            const processedData = this.preprocessImage(imageData);
+            code = jsQR(processedData.data, processedData.width, processedData.height, {
+                inversionAttempts: 'attemptBoth'
+            });
+        }
+
+        return code ? code.data : null;
     }
 
     // Предварительная обработка изображения для улучшения распознавания
