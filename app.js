@@ -133,6 +133,7 @@ class MatterQRScanner {
     }
 
     stopScanning() {
+        console.log('🛑 Останавливаем сканирование...');
         this.scanning = false;
         if (this.stream) {
             this.stream.getTracks().forEach(track => track.stop());
@@ -183,6 +184,7 @@ class MatterQRScanner {
             if (code) {
                 console.log('✅ QR код найден:', code.data);
                 this.handleQRCode(code.data);
+                return; // Выходим из цикла сканирования
             }
 
         } catch (error) {
@@ -225,6 +227,11 @@ class MatterQRScanner {
     }
 
     handleQRCode(qrData) {
+        if (!qrData || qrData.trim() === '') {
+            console.warn('⚠️ Получен пустой QR код');
+            return;
+        }
+
         // Дедупликация
         if (this.lastScannedCode === qrData) {
             console.log('⏭️ Пропускаем дублирующийся код');
@@ -244,20 +251,33 @@ class MatterQRScanner {
             raw: this.parseQRCode(qrData)
         };
 
+        console.log('📊 Результат:', result);
+
         // Проверяем, есть ли уже такой код в истории
-        if (!this.scannedResults.some(r => r.data === qrData)) {
+        const isDuplicate = this.scannedResults.some(r => r.data === qrData);
+        
+        if (!isDuplicate) {
             this.scannedResults.unshift(result);
             this.saveScannedResults();
             this.renderResults();
             this.showToast('✅ QR код успешно отсканирован!', 'success');
             this.playBeep();
-            console.log('💾 Результат сохранен:', result);
+            console.log('💾 Результат сохранен в массив. Всего результатов:', this.scannedResults.length);
+            
+            // Останавливаем сканирование
+            this.stopScanning();
+            
+            // Показываем результат в модальном окне
+            setTimeout(() => {
+                this.showDetail(result.id);
+            }, 500);
         } else {
             console.log('ℹ️ Этот код уже в истории');
         }
     }
 
     detectMatterType(qrData) {
+        if (!qrData) return '📱 QR Code';
         if (qrData.startsWith('MT:')) return '🔗 Matter Device';
         if (qrData.includes('https://matter.')) return '🔗 Matter Link';
         if (qrData.startsWith('http')) return '🌐 URL';
@@ -272,7 +292,7 @@ class MatterQRScanner {
             matterData: null
         };
 
-        if (qrData.startsWith('MT:')) {
+        if (qrData && qrData.startsWith('MT:')) {
             result.isMatter = true;
             try {
                 const payload = qrData.substring(3);
@@ -333,27 +353,38 @@ class MatterQRScanner {
 
     showDetail(resultId) {
         const result = this.scannedResults.find(r => r.id === resultId);
-        if (!result) return;
+        if (!result) {
+            console.error('❌ Результат не найден:', resultId);
+            console.log('📋 Доступные результаты:', this.scannedResults.map(r => r.id));
+            return;
+        }
 
-        const matterInfo = result.raw?.matterData ? `
-            <h4>📊 Данные Matter:</h4>
-            <div style="background-color: var(--bg-secondary); padding: 12px; border-radius: 4px; margin-bottom: 12px;">
-                <p><strong>Prefix:</strong> <code>${result.raw.matterData.prefix}</code></p>
-                <p><strong>Payload:</strong> <code>${result.raw.matterData.payload}</code></p>
-                <p><strong>Длина:</strong> ${result.raw.matterData.length} символов</p>
-                <p><strong>Версия:</strong> ${result.raw.matterData.components.version || 'Неизвестна'}</p>
-                <p><strong>Возможный PIN:</strong> <code>${result.raw.matterData.components.possiblePin || 'Неизвестен'}</code></p>
-                <p><strong>Сегменты:</strong> ${result.raw.matterData.components.segmentCount}</p>
-            </div>
-        ` : '';
+        console.log('📖 Показываем детали для:', result);
+
+        const isMatter = result.raw && result.raw.isMatter;
+        
+        let matterInfo = '';
+        if (isMatter && result.raw.matterData) {
+            matterInfo = `
+                <h4>📊 Данные Matter:</h4>
+                <div style="background-color: var(--bg-secondary); padding: 12px; border-radius: 4px; margin-bottom: 12px;">
+                    <p><strong>Prefix:</strong> <code>${result.raw.matterData.prefix}</code></p>
+                    <p><strong>Payload:</strong> <code>${this.escapeHtml(result.raw.matterData.payload)}</code></p>
+                    <p><strong>Длина:</strong> ${result.raw.matterData.length} символов</p>
+                    <p><strong>Версия:</strong> ${result.raw.matterData.components?.version || 'Неизвестна'}</p>
+                    <p><strong>Возможный PIN:</strong> <code>${result.raw.matterData.components?.possiblePin || 'Неизвестен'}</code></p>
+                    <p><strong>Сегменты:</strong> ${result.raw.matterData.components?.segmentCount || 0}</p>
+                </div>
+            `;
+        }
 
         this.modalBody.innerHTML = `
             <h3>${result.type}</h3>
             <p><strong>Время:</strong> ${result.timestamp.toLocaleString('ru-RU')}</p>
             <h4>Полные данные QR кода:</h4>
-            <pre style="word-break: break-all; white-space: pre-wrap;">${this.escapeHtml(result.data)}</pre>
+            <pre style="word-break: break-all; white-space: pre-wrap; background-color: var(--bg-secondary); padding: 12px; border-radius: 4px; margin-bottom: 12px;">${this.escapeHtml(result.data)}</pre>
             ${matterInfo}
-            <button class="btn btn-primary" style="width: 100%;" onclick="scanner.copyToClipboard(${resultId})">📋 Копировать в буфер обмена</button>
+            <button class="btn btn-primary" style="width: 100%; margin-top: 12px;" onclick="scanner.copyToClipboard(${resultId})">📋 Копировать в буфер обмена</button>
         `;
         this.detailModal.classList.remove('hidden');
     }
@@ -480,6 +511,7 @@ class MatterQRScanner {
                     timestamp: new Date(r.timestamp)
                 }));
                 this.renderResults();
+                console.log('📂 Загружено результатов:', this.scannedResults.length);
             } catch (e) {
                 console.error('Ошибка при загрузке результатов:', e);
             }
