@@ -1,11 +1,11 @@
-const CACHE_NAME = 'matter-qr-scanner-v1';
+const CACHE_NAME = 'matter-qr-scanner-v2';
 const URLS_TO_CACHE = [
     './',
     './index.html',
     './styles.css',
     './app.js',
     './manifest.json',
-    'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js'
+    'https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner.umd.min.js'
 ];
 
 // Установка Service Worker
