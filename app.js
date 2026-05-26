@@ -24,6 +24,7 @@ class MatterQRScanner {
         this.autofocusIntervalId = null;
         this.barcodeDetector = null;
         this.scanFrameCounter = 0;
+        this.jsqrAvailable = typeof window.jsQR === 'function';
         
         this.init();
     }
@@ -31,6 +32,9 @@ class MatterQRScanner {
     init() {
         this.setupEventListeners();
         this.initDetector();
+        if (!this.jsqrAvailable) {
+            console.warn('⚠️ jsQR библиотека не загружена; fallback-детектор недоступен');
+        }
         this.loadScannedResults();
         this.registerServiceWorker();
     }
@@ -67,6 +71,7 @@ class MatterQRScanner {
             this.startBtn.disabled = true;
 
             this.scanFrameCounter = 0;
+            this.jsqrAvailable = typeof window.jsQR === 'function';
             this.stream = await this.getBestCameraStream();
             this.video.srcObject = this.stream;
 
@@ -266,6 +271,8 @@ class MatterQRScanner {
     }
 
     detectWithJsQR(imageData) {
+        if (!this.jsqrAvailable) return null;
+
         let code = jsQR(imageData.data, imageData.width, imageData.height, {
             inversionAttempts: 'attemptBoth'
         });
@@ -313,34 +320,36 @@ class MatterQRScanner {
     }
 
     handleQRCode(qrData) {
-        if (!qrData || qrData.trim() === '') {
+        const normalizedData = this.normalizeQRData(qrData);
+
+        if (!normalizedData) {
             console.warn('⚠️ Получен пустой QR код');
             return;
         }
 
         // Дедупликация
-        if (this.lastScannedCode === qrData) {
+        if (this.lastScannedCode === normalizedData) {
             console.log('⏭️ Пропускаем дублирующийся код');
             return;
         }
 
-        this.lastScannedCode = qrData;
+        this.lastScannedCode = normalizedData;
         setTimeout(() => {
             this.lastScannedCode = null;
         }, this.dedupeTime);
 
         const result = {
             id: Date.now(),
-            data: qrData,
+            data: normalizedData,
             timestamp: new Date(),
-            type: this.detectMatterType(qrData),
-            raw: this.parseQRCode(qrData)
+            type: this.detectMatterType(normalizedData),
+            raw: this.parseQRCode(normalizedData)
         };
 
         console.log('📊 Результат:', result);
 
         // Проверяем, есть ли уже такой код в истории
-        const isDuplicate = this.scannedResults.some(r => r.data === qrData);
+        const isDuplicate = this.scannedResults.some(r => r.data === normalizedData);
         
         if (!isDuplicate) {
             this.scannedResults.unshift(result);
@@ -362,10 +371,16 @@ class MatterQRScanner {
         }
     }
 
+
+    normalizeQRData(qrData) {
+        if (typeof qrData !== 'string') return '';
+        return qrData.trim().replace(/\s+/g, '');
+    }
+
     detectMatterType(qrData) {
         if (!qrData) return '📱 QR Code';
-        if (qrData.startsWith('MT:')) return '🔗 Matter Device';
-        if (qrData.includes('https://matter.')) return '🔗 Matter Link';
+        if (qrData.toUpperCase().startsWith('MT:')) return '🔗 Matter Device';
+        if (qrData.toLowerCase().includes('https://matter.')) return '🔗 Matter Link';
         if (qrData.startsWith('http')) return '🌐 URL';
         return '📱 QR Code';
     }
@@ -378,10 +393,10 @@ class MatterQRScanner {
             matterData: null
         };
 
-        if (qrData && qrData.startsWith('MT:')) {
+        if (qrData && qrData.toUpperCase().startsWith('MT:')) {
             result.isMatter = true;
             try {
-                const payload = qrData.substring(3);
+                const payload = qrData.slice(qrData.indexOf(':') + 1);
                 result.matterData = {
                     prefix: 'MT:',
                     payload: payload,
