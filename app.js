@@ -1,4 +1,4 @@
-// QR Scanner App
+// QR Scanner App with improved focus and Matter device detection
 class MatterQRScanner {
     constructor() {
         this.video = document.getElementById('video');
@@ -20,7 +20,11 @@ class MatterQRScanner {
         this.scanningFrameId = null;
         this.flashActive = false;
         this.lastScannedCode = null;
-        this.dedupeTime = 5000; // 5 секунд для дедупликации
+        this.dedupeTime = 5000;
+        
+        // Canvas для обработки изображения
+        this.processingCanvas = document.createElement('canvas');
+        this.processingContext = this.processingCanvas.getContext('2d', { willReadFrequently: true });
 
         this.init();
     }
@@ -41,6 +45,8 @@ class MatterQRScanner {
                 this.closeModal();
             }
         });
+        // Добавляем tap-to-focus для Android
+        this.video.addEventListener('click', () => this.triggerFocus());
     }
 
     async startScanning() {
@@ -48,11 +54,18 @@ class MatterQRScanner {
             this.loadingEl.classList.remove('hidden');
             this.startBtn.disabled = true;
 
+            // Максимально высокое разрешение для лучшей фокусировки
             const constraints = {
                 video: {
-                    facingMode: 'environment',
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
+                    facingMode: { exact: 'environment' },
+                    width: { ideal: 1920, min: 640 },
+                    height: { ideal: 1080, min: 480 },
+                    // Пытаемся установить continuous focus
+                    focusMode: { ideal: 'continuous' },
+                    advanced: [
+                        { focusMode: 'continuous' },
+                        { zoom: { ideal: 1 } }
+                    ]
                 },
                 audio: false
             };
@@ -60,20 +73,25 @@ class MatterQRScanner {
             this.stream = await navigator.mediaDevices.getUserMedia(constraints);
             this.video.srcObject = this.stream;
 
-            // Добавляем обработчик события onplay вместо onloadedmetadata
+            // Применяем фокусировку после получения потока
+            await this.applyFocusConstraints();
+
             this.video.onplay = () => {
-                console.log('📹 Видео запущено');
+                console.log('📹 Видео запущено', {
+                    width: this.video.videoWidth,
+                    height: this.video.videoHeight,
+                    facingMode: this.stream.getVideoTracks()[0].getSettings().facingMode
+                });
                 this.scanning = true;
                 this.startBtn.classList.add('hidden');
                 this.stopBtn.classList.remove('hidden');
                 this.toggleFlashBtn.disabled = false;
                 this.loadingEl.classList.add('hidden');
-                this.showToast('Камера включена', 'success');
+                this.showToast('📹 Камера включена. Подносите QR код к центру рамки', 'success');
                 // Начинаем сканирование
                 this.scanQRCode();
             };
 
-            // Пытаемся воспроизвести видео
             await this.video.play();
 
         } catch (error) {
@@ -81,6 +99,37 @@ class MatterQRScanner {
             this.startBtn.disabled = false;
             this.handleError(error);
         }
+    }
+
+    // Пытаемся применить фокусировку
+    async applyFocusConstraints() {
+        try {
+            const videoTrack = this.stream.getVideoTracks()[0];
+            if (!videoTrack) return;
+
+            const capabilities = videoTrack.getCapabilities();
+            console.log('📷 Возможности камеры:', {
+                focusMode: capabilities.focusMode,
+                zoom: capabilities.zoom,
+                torch: capabilities.torch
+            });
+
+            // Пытаемся установить continuous focus
+            if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
+                await videoTrack.applyConstraints({
+                    advanced: [{ focusMode: 'continuous' }]
+                });
+                console.log('✅ Continuous focus установлен');
+            }
+        } catch (error) {
+            console.log('ℹ️ Focus constraints не поддерживаются:', error.message);
+        }
+    }
+
+    // Trigger focus при клике (Android)
+    triggerFocus() {
+        console.log('👆 Попытка фокусировки...');
+        this.applyFocusConstraints();
     }
 
     stopScanning() {
@@ -106,7 +155,6 @@ class MatterQRScanner {
 
         // Проверяем, что видео готово
         if (this.video.videoWidth === 0 || this.video.videoHeight === 0) {
-            console.log('⏳ Видео еще загружается...');
             this.scanningFrameId = requestAnimationFrame(() => this.scanQRCode());
             return;
         }
@@ -117,21 +165,24 @@ class MatterQRScanner {
             
             // Рисуем текущий кадр из видео
             this.canvasContext.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+            const imageData = this.canvasContext.getImageData(0, 0, this.canvas.width, this.canvas.height);
 
-            // Получаем данные изображения
-            const imageData = this.canvasContext.getImageData(
-                0, 0, this.canvas.width, this.canvas.height
-            );
-
-            // Сканируем QR код
-            const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                inversionAttempts: 'dontInvert'
+            // Пытаемся распознать QR с обычным изображением
+            let code = jsQR(imageData.data, imageData.width, imageData.height, {
+                inversionAttempts: 'attemptBoth'
             });
+
+            // Если не нашли, пытаемся с обработанным изображением
+            if (!code) {
+                const processedData = this.preprocessImage(imageData);
+                code = jsQR(processedData.data, processedData.width, processedData.height, {
+                    inversionAttempts: 'attemptBoth'
+                });
+            }
 
             if (code) {
                 console.log('✅ QR код найден:', code.data);
                 this.handleQRCode(code.data);
-                // Не останавливаем сканирование автоматически, даём пользователю время
             }
 
         } catch (error) {
@@ -141,8 +192,40 @@ class MatterQRScanner {
         this.scanningFrameId = requestAnimationFrame(() => this.scanQRCode());
     }
 
+    // Предварительная обработка изображения для улучшения распознавания
+    preprocessImage(imageData) {
+        const data = imageData.data;
+        const width = imageData.width;
+        const height = imageData.height;
+
+        // Преобразуем в grayscale + увеличиваем контраст
+        const processedData = new Uint8ClampedArray(data.length);
+
+        for (let i = 0; i < data.length; i += 4) {
+            // Grayscale преобразование (luminosity method)
+            const gray = Math.round(
+                0.299 * data[i] +      // R
+                0.587 * data[i + 1] +  // G
+                0.114 * data[i + 2]    // B
+            );
+
+            // Увеличиваем контраст (contrast = 1.5)
+            const contrast = 1.5;
+            const adjusted = Math.round((gray - 128) * contrast + 128);
+            const clamped = Math.max(0, Math.min(255, adjusted));
+
+            // Копируем в новый массив
+            processedData[i] = clamped;      // R
+            processedData[i + 1] = clamped;  // G
+            processedData[i + 2] = clamped;  // B
+            processedData[i + 3] = data[i + 3]; // A (alpha)
+        }
+
+        return new ImageData(processedData, width, height);
+    }
+
     handleQRCode(qrData) {
-        // Дедупликация - не добавляем одинаковые коды в течение 5 секунд
+        // Дедупликация
         if (this.lastScannedCode === qrData) {
             console.log('⏭️ Пропускаем дублирующийся код');
             return;
@@ -157,7 +240,8 @@ class MatterQRScanner {
             id: Date.now(),
             data: qrData,
             timestamp: new Date(),
-            type: this.detectMatterType(qrData)
+            type: this.detectMatterType(qrData),
+            raw: this.parseQRCode(qrData)
         };
 
         // Проверяем, есть ли уже такой код в истории
@@ -174,10 +258,56 @@ class MatterQRScanner {
     }
 
     detectMatterType(qrData) {
-        // Попытка определить тип устройства Matter по содержимому QR кода
-        if (qrData.includes('MT:')) return 'Matter Device';
-        if (qrData.includes('https://matter.')) return 'Matter Link';
-        return 'QR Code';
+        if (qrData.startsWith('MT:')) return '🔗 Matter Device';
+        if (qrData.includes('https://matter.')) return '🔗 Matter Link';
+        if (qrData.startsWith('http')) return '🌐 URL';
+        return '📱 QR Code';
+    }
+
+    // Парсим Matter QR код
+    parseQRCode(qrData) {
+        const result = {
+            raw: qrData,
+            isMatter: false,
+            matterData: null
+        };
+
+        if (qrData.startsWith('MT:')) {
+            result.isMatter = true;
+            try {
+                const payload = qrData.substring(3);
+                result.matterData = {
+                    prefix: 'MT:',
+                    payload: payload,
+                    length: payload.length,
+                    // Простой парсинг компонентов
+                    components: this.parseMatterPayload(payload)
+                };
+            } catch (e) {
+                console.error('Ошибка при парсинге Matter:', e);
+            }
+        }
+
+        return result;
+    }
+
+    // Парсим Matter payload (base38 кодированный)
+    parseMatterPayload(payload) {
+        try {
+            // Matter использует base38 кодирование
+            // Попытаемся выделить компоненты
+            const parts = payload.split(/[-. ]+/);
+            return {
+                segments: parts,
+                segmentCount: parts.length,
+                // Первый символ часто версия
+                version: parts[0]?.[0],
+                // Последние 4-6 символов часто PIN код
+                possiblePin: parts[parts.length - 1]?.slice(-6)
+            };
+        } catch (e) {
+            return null;
+        }
     }
 
     renderResults() {
@@ -205,38 +335,27 @@ class MatterQRScanner {
         const result = this.scannedResults.find(r => r.id === resultId);
         if (!result) return;
 
-        const matterData = this.parseMatterData(result.data);
+        const matterInfo = result.raw?.matterData ? `
+            <h4>📊 Данные Matter:</h4>
+            <div style="background-color: var(--bg-secondary); padding: 12px; border-radius: 4px; margin-bottom: 12px;">
+                <p><strong>Prefix:</strong> <code>${result.raw.matterData.prefix}</code></p>
+                <p><strong>Payload:</strong> <code>${result.raw.matterData.payload}</code></p>
+                <p><strong>Длина:</strong> ${result.raw.matterData.length} символов</p>
+                <p><strong>Версия:</strong> ${result.raw.matterData.components.version || 'Неизвестна'}</p>
+                <p><strong>Возможный PIN:</strong> <code>${result.raw.matterData.components.possiblePin || 'Неизвестен'}</code></p>
+                <p><strong>Сегменты:</strong> ${result.raw.matterData.components.segmentCount}</p>
+            </div>
+        ` : '';
+
         this.modalBody.innerHTML = `
-            <h3>📱 ${result.type}</h3>
-            <p><strong>Время сканирования:</strong> ${result.timestamp.toLocaleString('ru-RU')}</p>
-            <h4>Данные QR кода:</h4>
-            <pre>${this.escapeHtml(result.data)}</pre>
-            ${matterData ? `
-                <h4>Распознанные данные Matter:</h4>
-                <div style="background-color: var(--bg-secondary); padding: 12px; border-radius: 4px; margin-bottom: 12px;">
-                    ${matterData}
-                </div>
-            ` : ''}
+            <h3>${result.type}</h3>
+            <p><strong>Время:</strong> ${result.timestamp.toLocaleString('ru-RU')}</p>
+            <h4>Полные данные QR кода:</h4>
+            <pre style="word-break: break-all; white-space: pre-wrap;">${this.escapeHtml(result.data)}</pre>
+            ${matterInfo}
             <button class="btn btn-primary" style="width: 100%;" onclick="scanner.copyToClipboard(${resultId})">📋 Копировать в буфер обмена</button>
         `;
         this.detailModal.classList.remove('hidden');
-    }
-
-    parseMatterData(data) {
-        // Простой парсинг Matter данных
-        try {
-            if (data.startsWith('MT:')) {
-                const parts = data.substring(3).split('/');
-                let html = '';
-                parts.forEach((part, i) => {
-                    if (part) html += `<p><code>${this.escapeHtml(part)}</code></p>`;
-                });
-                return html;
-            }
-            return null;
-        } catch (e) {
-            return null;
-        }
     }
 
     closeModal() {
@@ -277,7 +396,7 @@ class MatterQRScanner {
             advanced: [{ torch: this.flashActive }]
         }).then(() => {
             this.updateFlashButton();
-            this.showToast(this.flashActive ? 'Вспышка включена' : 'Вспышка выключена', 'success');
+            this.showToast(this.flashActive ? '💡 Вспышка включена' : '💡 Вспышка выключена', 'success');
         }).catch(() => {
             this.showToast('Ошибка управления вспышкой', 'error');
             this.flashActive = !this.flashActive;
@@ -317,7 +436,7 @@ class MatterQRScanner {
             oscillator.start(audioContext.currentTime);
             oscillator.stop(audioContext.currentTime + 0.5);
         } catch (error) {
-            console.log('Audio context error (this is ok):', error);
+            console.log('Audio context ошибка (это нормально):', error.message);
         }
     }
 
@@ -371,9 +490,9 @@ class MatterQRScanner {
         if ('serviceWorker' in navigator) {
             try {
                 await navigator.serviceWorker.register('sw.js');
-                console.log('Service Worker зарегистрирован');
+                console.log('✅ Service Worker зарегистрирован');
             } catch (error) {
-                console.error('Ошибка регистрации Service Worker:', error);
+                console.error('❌ Ошибка регистрации Service Worker:', error);
             }
         }
     }
@@ -383,11 +502,13 @@ class MatterQRScanner {
         let message = 'Неизвестная ошибка';
 
         if (error.name === 'NotAllowedError') {
-            message = 'Вы запретили доступ к камере. Пожалуйста, разрешите доступ в настройках.';
+            message = 'Вы запретили доступ к камере. Разрешите в настройках браузера.';
         } else if (error.name === 'NotFoundError') {
             message = 'Камера не найдена. Проверьте устройство.';
         } else if (error.name === 'NotReadableError') {
             message = 'Камера занята другим приложением.';
+        } else if (error.name === 'OverconstrainedError') {
+            message = 'Камера не поддерживает запрашиваемые параметры. Пытаемся с меньшим разрешением...';
         }
 
         this.showToast(`❌ ${message}`, 'error');
