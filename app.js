@@ -3,7 +3,7 @@ class MatterQRScanner {
     constructor() {
         this.video = document.getElementById('video');
         this.canvas = document.getElementById('canvas');
-        this.canvasContext = this.canvas.getContext('2d');
+        this.canvasContext = this.canvas.getContext('2d', { willReadFrequently: true });
         this.startBtn = document.getElementById('startBtn');
         this.stopBtn = document.getElementById('stopBtn');
         this.toggleFlashBtn = document.getElementById('toggleFlash');
@@ -19,6 +19,8 @@ class MatterQRScanner {
         this.scannedResults = [];
         this.scanningFrameId = null;
         this.flashActive = false;
+        this.lastScannedCode = null;
+        this.dedupeTime = 5000; // 5 секунд для дедупликации
 
         this.init();
     }
@@ -58,16 +60,22 @@ class MatterQRScanner {
             this.stream = await navigator.mediaDevices.getUserMedia(constraints);
             this.video.srcObject = this.stream;
 
-            this.video.onloadedmetadata = () => {
-                this.video.play();
+            // Добавляем обработчик события onplay вместо onloadedmetadata
+            this.video.onplay = () => {
+                console.log('📹 Видео запущено');
                 this.scanning = true;
                 this.startBtn.classList.add('hidden');
                 this.stopBtn.classList.remove('hidden');
                 this.toggleFlashBtn.disabled = false;
                 this.loadingEl.classList.add('hidden');
                 this.showToast('Камера включена', 'success');
+                // Начинаем сканирование
                 this.scanQRCode();
             };
+
+            // Пытаемся воспроизвести видео
+            await this.video.play();
+
         } catch (error) {
             this.loadingEl.classList.add('hidden');
             this.startBtn.disabled = false;
@@ -96,23 +104,55 @@ class MatterQRScanner {
     scanQRCode() {
         if (!this.scanning) return;
 
-        this.canvas.width = this.video.videoWidth;
-        this.canvas.height = this.video.videoHeight;
-        this.canvasContext.drawImage(this.video, 0, 0);
+        // Проверяем, что видео готово
+        if (this.video.videoWidth === 0 || this.video.videoHeight === 0) {
+            console.log('⏳ Видео еще загружается...');
+            this.scanningFrameId = requestAnimationFrame(() => this.scanQRCode());
+            return;
+        }
 
-        const imageData = this.canvasContext.getImageData(
-            0, 0, this.canvas.width, this.canvas.height
-        );
-        const code = jsQR(imageData.data, imageData.width, imageData.height);
+        try {
+            this.canvas.width = this.video.videoWidth;
+            this.canvas.height = this.video.videoHeight;
+            
+            // Рисуем текущий кадр из видео
+            this.canvasContext.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
 
-        if (code) {
-            this.handleQRCode(code.data);
+            // Получаем данные изображения
+            const imageData = this.canvasContext.getImageData(
+                0, 0, this.canvas.width, this.canvas.height
+            );
+
+            // Сканируем QR код
+            const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                inversionAttempts: 'dontInvert'
+            });
+
+            if (code) {
+                console.log('✅ QR код найден:', code.data);
+                this.handleQRCode(code.data);
+                // Не останавливаем сканирование автоматически, даём пользователю время
+            }
+
+        } catch (error) {
+            console.error('❌ Ошибка при сканировании:', error);
         }
 
         this.scanningFrameId = requestAnimationFrame(() => this.scanQRCode());
     }
 
     handleQRCode(qrData) {
+        // Дедупликация - не добавляем одинаковые коды в течение 5 секунд
+        if (this.lastScannedCode === qrData) {
+            console.log('⏭️ Пропускаем дублирующийся код');
+            return;
+        }
+
+        this.lastScannedCode = qrData;
+        setTimeout(() => {
+            this.lastScannedCode = null;
+        }, this.dedupeTime);
+
         const result = {
             id: Date.now(),
             data: qrData,
@@ -120,16 +160,16 @@ class MatterQRScanner {
             type: this.detectMatterType(qrData)
         };
 
-        // Проверяем, есть ли уже такой код
+        // Проверяем, есть ли уже такой код в истории
         if (!this.scannedResults.some(r => r.data === qrData)) {
             this.scannedResults.unshift(result);
             this.saveScannedResults();
             this.renderResults();
             this.showToast('✅ QR код успешно отсканирован!', 'success');
             this.playBeep();
-
-            // Останавливаем сканирование после успешного сканирования
-            this.stopScanning();
+            console.log('💾 Результат сохранен:', result);
+        } else {
+            console.log('ℹ️ Этот код уже в истории');
         }
     }
 
@@ -260,21 +300,25 @@ class MatterQRScanner {
     }
 
     playBeep() {
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
+        try {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
 
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
 
-        oscillator.frequency.value = 800;
-        oscillator.type = 'sine';
+            oscillator.frequency.value = 800;
+            oscillator.type = 'sine';
 
-        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
 
-        oscillator.start(audioContext.currentTime);
-        oscillator.stop(audioContext.currentTime + 0.5);
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.5);
+        } catch (error) {
+            console.log('Audio context error (this is ok):', error);
+        }
     }
 
     formatTime(date) {
