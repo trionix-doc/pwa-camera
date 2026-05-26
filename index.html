@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#1976d2">
+    <meta name="description" content="PWA приложение для сканирования QR кодов Matter устройств">
+    <title>Matter QR Scanner</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" sizes="192x192" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect fill='%231976d2' width='192' height='192'/%3E%3Ctext x='50%' y='50%' font-size='100' fill='white' text-anchor='middle' dominant-baseline='middle' font-family='Arial'%3EQR%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <h1>🔍 Matter QR Scanner</h1>
+            <p class="subtitle">Сканирование QR кодов устройств Matter</p>
+        </header>
+
+        <!-- Main Content -->
+        <main class="app-main">
+            <!-- Camera Container -->
+            <div class="camera-section">
+                <div class="camera-wrapper">
+                    <video id="video" class="video-stream" playsinline></video>
+                    <canvas id="canvas" class="hidden"></canvas>
+                    <div class="camera-overlay">
+                        <div class="scan-frame"></div>
+                    </div>
+                    <div id="loading" class="loading hidden">
+                        <div class="spinner"></div>
+                        <p>Инициализация камеры...</p>
+                    </div>
+                </div>
+                
+                <!-- Camera Controls -->
+                <div class="camera-controls">
+                    <button id="startBtn" class="btn btn-primary">
+                        <span>▶</span> Начать сканирование
+                    </button>
+                    <button id="stopBtn" class="btn btn-secondary hidden">
+                        <span>⏹</span> Остановить
+                    </button>
+                    <button id="toggleFlash" class="btn btn-secondary">
+                        <span>🔦</span> Вспышка
+                    </button>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div class="results-section">
+                <h2>Результаты сканирования</h2>
+                <div id="resultsList" class="results-list">
+                    <p class="empty-state">Сканированные коды будут отображены здесь</p>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <p>Приложение работает offline | v1.0</p>
+        </footer>
+    </div>
+
+    <!-- Result Detail Modal -->
+    <div id="detailModal" class="modal hidden">
+        <div class="modal-content">
+            <button class="modal-close">&times;</button>
+            <div id="modalBody" class="modal-body"></div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
