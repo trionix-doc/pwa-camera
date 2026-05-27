@@ -24,7 +24,6 @@
             <div class="camera-section">
                 <div class="camera-wrapper">
                     <video id="video" class="video-stream" playsinline></video>
-                    <canvas id="canvas" class="hidden"></canvas>
                     <div class="camera-overlay">
                         <div class="scan-frame"></div>
                     </div>
@@ -59,7 +58,7 @@
 
         <!-- Footer -->
         <footer class="app-footer">
-            <p>Приложение работает offline | v1.0</p>
+            <p>Приложение работает offline | v2.0</p>
         </footer>
     </div>
 
@@ -74,6 +73,7 @@
     <!-- Toast Notification -->
     <div id="toast" class="toast hidden"></div>
 
+    <!-- QrScanner библиотека для лучшей поддержки мобилы -->
     <script src="https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner.umd.min.js"></script>
     <script src="app.js"></script>
 </body>
