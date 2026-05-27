@@ -24,8 +24,15 @@ class MatterQRScanner {
 
     init() {
         this.setupEventListeners();
+
+        if (this.isEmbeddedInIframe()) {
+            this.blockEmbeddedMode();
+            return;
+        }
+
         this.loadScannedResults();
         this.registerServiceWorker();
+        this.applyBrowserCompatibilityHints();
     }
 
     setupEventListeners() {
@@ -37,6 +44,33 @@ class MatterQRScanner {
             if (e.target === this.detailModal) this.closeModal();
         });
     }
+
+    isEmbeddedInIframe() {
+        return window.self !== window.top;
+    }
+
+    blockEmbeddedMode() {
+        this.startBtn.disabled = true;
+        this.toggleFlashBtn.disabled = true;
+        this.resultsList.innerHTML = `
+            <p class="empty-state">Откройте приложение напрямую в отдельной вкладке. В режиме iframe доступ к камере ограничен.</p>
+        `;
+        this.showToast('⚠️ Камера в iframe может быть недоступна. Откройте приложение напрямую.', 'error');
+    }
+
+    applyBrowserCompatibilityHints() {
+        if (!this.isSafari()) return;
+
+        this.showToast('ℹ️ Safari: если камера не стартует, откройте приложение в обычной вкладке и проверьте доступ к камере в настройках.', 'info');
+    }
+
+    isSafari() {
+        const ua = navigator.userAgent;
+        const isWebKit = /Safari/i.test(ua) && /Apple Computer/i.test(navigator.vendor || '');
+        const isExcluded = /CriOS|FxiOS|EdgiOS/i.test(ua);
+        return isWebKit && !isExcluded;
+    }
+
 
     async startScanning() {
         try {
@@ -154,11 +188,6 @@ class MatterQRScanner {
     }
 
 
-    normalizeQRData(qrData) {
-        if (typeof qrData !== 'string') return '';
-        return qrData.trim().replace(/\s+/g, '');
-    }
-
     detectMatterType(qrData) {
         if (!qrData) return '📱 QR Code';
         if (qrData.toUpperCase().startsWith('MT:')) return '🔗 Matter Device';
@@ -269,12 +298,32 @@ class MatterQRScanner {
     }
     truncate(str, length) { return str.length > length ? str.substring(0, length) + '...' : str; }
     escapeHtml(text) { const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
-    copyToClipboard(resultId) {
+    async copyToClipboard(resultId) {
         const result = this.scannedResults.find(r => r.id === resultId);
         if (!result) return;
-        navigator.clipboard.writeText(result.data)
-            .then(() => this.showToast('✅ Скопировано в буфер обмена', 'success'))
-            .catch(() => this.showToast('❌ Ошибка при копировании', 'error'));
+
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(result.data);
+            } else {
+                this.copyWithExecCommand(result.data);
+            }
+            this.showToast('✅ Скопировано в буфер обмена', 'success');
+        } catch (_) {
+            this.showToast('❌ Ошибка при копировании', 'error');
+        }
+    }
+
+    copyWithExecCommand(text) {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-9999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
     }
     deleteResult(resultId) {
         this.scannedResults = this.scannedResults.filter(r => r.id !== resultId);
